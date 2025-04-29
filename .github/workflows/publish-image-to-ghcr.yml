@@ -1,0 +1,113 @@
+name: Build and Push Image
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  # Uses docker.io for Docker Hub if REGISTRY is empty
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Check disk space
+        run: |
+          du -hs .
+          df -h .
+
+      - name: Free disk space
+        run: |
+          sudo docker rmi $(docker image ls -aq) >/dev/null 2>&1 || true
+          sudo rm -rf \
+            /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/share/powershell /usr/share/swift /usr/local/.ghcup \
+            /usr/lib/jvm || true
+          echo "some directories deleted"
+          sudo apt install aptitude -y >/dev/null 2>&1
+          sudo aptitude purge aria2 ansible azure-cli shellcheck rpm xorriso zsync \
+            esl-erlang firefox gfortran-8 gfortran-9 google-chrome-stable \
+            google-cloud-sdk imagemagick \
+            libmagickcore-dev libmagickwand-dev libmagic-dev ant ant-optional kubectl \
+            mercurial apt-transport-https mono-complete libmysqlclient \
+            unixodbc-dev yarn chrpath libssl-dev libxft-dev \
+            libfreetype6 libfreetype6-dev libfontconfig1 libfontconfig1-dev \
+            snmp pollinate libpq-dev postgresql-client powershell ruby-full \
+            sphinxsearch subversion mongodb-org azure-cli microsoft-edge-stable \
+            -y -f >/dev/null 2>&1
+          sudo aptitude purge google-cloud-sdk -f -y >/dev/null 2>&1
+          sudo aptitude purge microsoft-edge-stable -f -y >/dev/null 2>&1 || true
+          sudo apt purge microsoft-edge-stable -f -y >/dev/null 2>&1 || true
+          sudo aptitude purge '~n ^mysql' -f -y >/dev/null 2>&1
+          sudo aptitude purge '~n ^php' -f -y >/dev/null 2>&1
+          sudo aptitude purge '~n ^dotnet' -f -y >/dev/null 2>&1
+          sudo apt-get autoremove -y >/dev/null 2>&1
+          sudo apt-get autoclean -y >/dev/null 2>&1
+          echo "some packages purged"
+
+      - name: Check disk space
+        run: |
+          du -hs .
+          df -h .
+
+      # Checkout the repository
+      # Repo: https://github.com/marketplace/actions/checkout
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+
+      # Setup Docker buildx
+      # Repo: https://github.com/marketplace/actions/docker-setup-buildx
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3.10.0
+
+      # Login against a Docker registry except on PR
+      # Repo: https://github.com/marketplace/actions/docker-login
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3.3.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract metadata (tags, labels) for Docker
+      # Repo: https://github.com/marketplace/actions/docker-metadata-action
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5.7.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/backend-base-image
+          tags: |
+            type=sha,format=short,prefix=,suffix=
+            type=sha,format=long,prefix=,suffix=
+            type=ref,event=branch,prefix=,suffix=
+
+      - name: Disply metadata
+        run: |
+          cat ${{steps.meta.outputs.bake-file }}
+
+      # Archive metadata for use in other steps
+      # Repo: https://github.com/marketplace/actions/upload-a-build-artifact
+      - name: Archive metadata
+        uses: actions/upload-artifact@v4.6.1
+        with:
+          name: metadata.json
+          path: ${{steps.meta.outputs.bake-file }}
+
+      # Build and push Docker images with Buildx (don't push on PR)
+      # Repo: https://github.com/marketplace/actions/build-and-push-docker-images
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v6.15.0
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64, linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
